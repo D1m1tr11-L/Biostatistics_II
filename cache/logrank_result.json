@@ -1,0 +1,7 @@
+{
+  "test_statistic": 24.71770536114099,
+  "critical_value": 3.8414588206941205,
+  "p_value": 6.637163935574333e-07,
+  "p_value_display": "<0.0001",
+  "alpha": 0.05
+}

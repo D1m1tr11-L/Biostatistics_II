@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 from typing import List, Dict, Any
 
 import pandas as pd
@@ -20,6 +21,18 @@ from utils.literature import summarize_uploaded_literature_files
 client = OpenAI()
 
 st.set_page_config(page_title="Extract Your Data", layout="wide")
+
+# -------------------------
+# Cache directory
+# -------------------------
+CACHE_DIR = Path("cache")
+CACHE_DIR.mkdir(exist_ok=True)
+
+CACHE_KM_JSON = CACHE_DIR / "km_data.json"
+CACHE_META_JSON = CACHE_DIR / "km_meta.json"
+CACHE_PSEUDO_CSV = CACHE_DIR / "pseudo_dataset.csv"
+CACHE_LOGRANK_JSON = CACHE_DIR / "logrank_result.json"
+CACHE_GROUP_PREFIX = "group_table__"
 
 # -------------------------
 # Unified Global Style
@@ -214,6 +227,12 @@ if "normalized_literature_summaries" not in st.session_state:
 if "relationship_result" not in st.session_state:
     st.session_state["relationship_result"] = None
 
+if "cached_pseudo_df" not in st.session_state:
+    st.session_state["cached_pseudo_df"] = None
+
+if "cached_logrank_result" not in st.session_state:
+    st.session_state["cached_logrank_result"] = None
+
 
 def parse_optional_float(text):
     text = text.strip()
@@ -265,6 +284,61 @@ def soft_summary(text: str):
         """,
         unsafe_allow_html=True
     )
+
+
+def cached_run_exists() -> bool:
+    return CACHE_KM_JSON.exists()
+
+
+def clear_group_cache_files():
+    for f in CACHE_DIR.glob(f"{CACHE_GROUP_PREFIX}*.csv"):
+        try:
+            f.unlink()
+        except Exception:
+            pass
+
+
+def save_cached_run(
+    km_data: Dict[str, Any],
+    group_tables: Dict[str, pd.DataFrame],
+    pseudo_df: pd.DataFrame = None,
+    logrank_result: Dict[str, Any] = None,
+):
+    CACHE_KM_JSON.write_text(json.dumps(km_data, indent=2), encoding="utf-8")
+
+    meta = {
+        "groups": list(group_tables.keys())
+    }
+    CACHE_META_JSON.write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+    clear_group_cache_files()
+    for group_name, df in group_tables.items():
+        safe = group_name.replace(" ", "_")
+        df.to_csv(CACHE_DIR / f"{CACHE_GROUP_PREFIX}{safe}.csv", index=False)
+
+    if pseudo_df is not None:
+        pseudo_df.to_csv(CACHE_PSEUDO_CSV, index=False)
+
+    if logrank_result is not None:
+        CACHE_LOGRANK_JSON.write_text(json.dumps(logrank_result, indent=2), encoding="utf-8")
+
+
+def load_cached_run():
+    km_data = json.loads(CACHE_KM_JSON.read_text(encoding="utf-8"))
+
+    group_tables = {}
+    for f in CACHE_DIR.glob(f"{CACHE_GROUP_PREFIX}*.csv"):
+        group_name = f.stem.replace(CACHE_GROUP_PREFIX, "").replace("_", " ")
+        group_tables[group_name] = pd.read_csv(f)
+
+    pseudo_df = pd.read_csv(CACHE_PSEUDO_CSV) if CACHE_PSEUDO_CSV.exists() else None
+    logrank_result = (
+        json.loads(CACHE_LOGRANK_JSON.read_text(encoding="utf-8"))
+        if CACHE_LOGRANK_JSON.exists()
+        else None
+    )
+
+    return km_data, group_tables, pseudo_df, logrank_result
 
 
 def normalize_literature_terms_llm(summaries: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -401,6 +475,7 @@ dialog_decorator = getattr(st, "dialog", None)
 if dialog_decorator is None:
     dialog_decorator = getattr(st, "experimental_dialog")
 
+
 @dialog_decorator("Academic integrity warning")
 def confirm_edit_dialog():
     st.warning(
@@ -433,7 +508,7 @@ if st.session_state["page_mode"] == "home":
     hero(
         "Extract Your Data",
         "A unified workspace for Kaplan–Meier curve extraction, literature summarization, "
-        "variable normalization, and cross-paper relationship inference."
+        "variable normalization, cross-paper relationship inference, and cached demo loading."
     )
 
     col1, col2 = st.columns(2, gap="large")
@@ -446,7 +521,8 @@ if st.session_state["page_mode"] == "home":
                 <div class="feature-title">Extract Data From KM curve</div>
                 <div class="feature-text">
                     Upload a Kaplan–Meier image, extract structured JSON with an LLM,
-                    generate editable grouped tables, and perform a log-rank test.
+                    generate editable grouped tables, perform a log-rank test,
+                    and save or load cached demo results.
                 </div>
             </div>
             """,
@@ -475,7 +551,7 @@ if st.session_state["page_mode"] == "home":
             st.rerun()
 
     st.markdown(
-        '<div class="footer-note">Everything runs inside a single app flow with a unified interface.</div>',
+        '<div class="footer-note">Use the KM module to generate a cached demo that can be loaded directly for submission.</div>',
         unsafe_allow_html=True
     )
     st.stop()
@@ -510,9 +586,7 @@ if st.session_state["page_mode"] == "relation":
         soft_summary(f"{len(uploaded_papers)} file(s) uploaded and ready for processing.")
 
     st.subheader("2. Generate Standardized Summaries")
-    st.write(
-        "The LLM will read each uploaded paper and return a consistent structured summary."
-    )
+    st.write("The LLM will read each uploaded paper and return a consistent structured summary.")
 
     if uploaded_papers:
         if st.button("Summarize Literature", use_container_width=True):
@@ -685,9 +759,31 @@ if st.session_state["page_mode"] == "km":
     with top2:
         page_header(
             "Extract Data From KM curve",
-            "Upload a KM image, extract structured results, generate editable grouped tables, and run a log-rank test.",
+            "Upload a KM image, extract structured results, generate editable grouped tables, run a log-rank test, and create a cached run.",
             chip="KM workflow"
         )
+
+    st.subheader("0. Cached Demo")
+
+    col_cache_1, col_cache_2 = st.columns(2, gap="large")
+
+    with col_cache_1:
+        if cached_run_exists():
+            if st.button("Load Cached Demo", use_container_width=True):
+                km_data, group_tables, pseudo_df, logrank_result = load_cached_run()
+                st.session_state["km_data"] = km_data
+                st.session_state["group_tables"] = group_tables
+                st.session_state["applied_group_tables"] = {
+                    k: v.copy() for k, v in group_tables.items()
+                }
+                st.session_state["cached_pseudo_df"] = pseudo_df
+                st.session_state["cached_logrank_result"] = logrank_result
+                st.success("Cached demo loaded.")
+        else:
+            st.info("No cached demo found yet.")
+
+    with col_cache_2:
+        st.caption("Run the KM workflow once, then save the current result as a cached demo for submission.")
 
     st.subheader("1. Upload and Extract")
 
@@ -713,6 +809,8 @@ if st.session_state["page_mode"] == "km":
                     st.session_state["sampling_meta"] = meta
                     st.session_state["group_tables"] = None
                     st.session_state["applied_group_tables"] = None
+                    st.session_state["cached_pseudo_df"] = None
+                    st.session_state["cached_logrank_result"] = None
                     reset_pending()
 
     if "km_data" in st.session_state:
@@ -813,6 +911,8 @@ if st.session_state["page_mode"] == "km":
                     st.session_state["applied_group_tables"] = {
                         k: v.copy() for k, v in group_tables.items()
                     }
+                    st.session_state["cached_pseudo_df"] = None
+                    st.session_state["cached_logrank_result"] = None
                     reset_pending()
 
         else:
@@ -826,6 +926,8 @@ if st.session_state["page_mode"] == "km":
                 st.session_state["applied_group_tables"] = {
                     k: v.copy() for k, v in group_tables.items()
                 }
+                st.session_state["cached_pseudo_df"] = None
+                st.session_state["cached_logrank_result"] = None
                 reset_pending()
 
     if st.session_state.get("group_tables") is not None:
@@ -951,6 +1053,8 @@ if st.session_state["page_mode"] == "km":
                     sample_sizes=st.session_state["sample_sizes"]
                 )
 
+                st.session_state["cached_pseudo_df"] = df_logrank
+
                 st.markdown("**Pseudo Dataset for Log-rank Test**")
                 st.dataframe(df_logrank, use_container_width=True)
 
@@ -970,6 +1074,15 @@ if st.session_state["page_mode"] == "km":
                         alpha=alpha_value
                     )
 
+                    simple_result = {
+                        "test_statistic": result["test_statistic"],
+                        "critical_value": result["critical_value"],
+                        "p_value": result["p_value"],
+                        "p_value_display": result["p_value_display"],
+                        "alpha": result["alpha"]
+                    }
+                    st.session_state["cached_logrank_result"] = simple_result
+
                     st.markdown("**Reconstructed Kaplan-Meier Curve**")
                     st.pyplot(result["plot"])
 
@@ -987,3 +1100,22 @@ if st.session_state["page_mode"] == "km":
                         st.success(f"Reject H0 at alpha = {result['alpha']}.")
                     else:
                         st.info(f"Fail to reject H0 at alpha = {result['alpha']}.")
+
+    if (
+        st.session_state.get("km_data") is not None
+        and st.session_state.get("applied_group_tables") is not None
+    ):
+        st.subheader("8. Save Cached Demo")
+        st.write("Save the current KM result so it can be loaded later as a cached run.")
+
+        if st.button("Save Current KM Result as Cached Demo", use_container_width=True):
+            try:
+                save_cached_run(
+                    km_data=st.session_state["km_data"],
+                    group_tables=st.session_state["applied_group_tables"],
+                    pseudo_df=st.session_state.get("cached_pseudo_df"),
+                    logrank_result=st.session_state.get("cached_logrank_result")
+                )
+                st.success("Cached demo saved successfully.")
+            except Exception as e:
+                st.error(f"Failed to save cached demo: {e}")
