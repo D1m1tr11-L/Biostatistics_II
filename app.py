@@ -397,7 +397,11 @@ Input normalized summaries:
     return json.loads(response.choices[0].message.content)
 
 
-@st.dialog("Academic integrity warning")
+dialog_decorator = getattr(st, "dialog", None)
+if dialog_decorator is None:
+    dialog_decorator = getattr(st, "experimental_dialog")
+
+@dialog_decorator("Academic integrity warning")
 def confirm_edit_dialog():
     st.warning(
         "Changing reconstructed survival values may affect the statistical result. "
