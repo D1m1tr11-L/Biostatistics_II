@@ -2,8 +2,9 @@ import base64
 import json
 from statistics import mean
 from openai import OpenAI
+import os
 
-client = OpenAI()
+client = OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
 
 def encode_image_to_base64(image_bytes: bytes) -> str:
