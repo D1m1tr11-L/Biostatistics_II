@@ -34,6 +34,10 @@ CACHE_PSEUDO_CSV = CACHE_DIR / "pseudo_dataset.csv"
 CACHE_LOGRANK_JSON = CACHE_DIR / "logrank_result.json"
 CACHE_GROUP_PREFIX = "group_table__"
 
+CACHE_LIT_SUMMARIES_JSON = CACHE_DIR / "literature_summaries.json"
+CACHE_LIT_NORMALIZED_JSON = CACHE_DIR / "literature_normalized.json"
+CACHE_LIT_RELATIONSHIP_JSON = CACHE_DIR / "literature_relationship.json"
+
 # -------------------------
 # Unified Global Style
 # -------------------------
@@ -339,7 +343,51 @@ def load_cached_run():
     )
 
     return km_data, group_tables, pseudo_df, logrank_result
+def literature_cached_run_exists() -> bool:
+    return CACHE_LIT_SUMMARIES_JSON.exists()
 
+
+def save_literature_cached_run(
+    literature_summaries,
+    normalized_literature_summaries=None,
+    relationship_result=None
+):
+    CACHE_LIT_SUMMARIES_JSON.write_text(
+        json.dumps(literature_summaries, indent=2),
+        encoding="utf-8"
+    )
+
+    if normalized_literature_summaries is not None:
+        CACHE_LIT_NORMALIZED_JSON.write_text(
+            json.dumps(normalized_literature_summaries, indent=2),
+            encoding="utf-8"
+        )
+
+    if relationship_result is not None:
+        CACHE_LIT_RELATIONSHIP_JSON.write_text(
+            json.dumps(relationship_result, indent=2),
+            encoding="utf-8"
+        )
+
+
+def load_literature_cached_run():
+    literature_summaries = json.loads(
+        CACHE_LIT_SUMMARIES_JSON.read_text(encoding="utf-8")
+    )
+
+    normalized_literature_summaries = (
+        json.loads(CACHE_LIT_NORMALIZED_JSON.read_text(encoding="utf-8"))
+        if CACHE_LIT_NORMALIZED_JSON.exists()
+        else None
+    )
+
+    relationship_result = (
+        json.loads(CACHE_LIT_RELATIONSHIP_JSON.read_text(encoding="utf-8"))
+        if CACHE_LIT_RELATIONSHIP_JSON.exists()
+        else None
+    )
+
+    return literature_summaries, normalized_literature_summaries, relationship_result
 
 def normalize_literature_terms_llm(summaries: List[Dict[str, Any]]) -> Dict[str, Any]:
     prompt = f"""
@@ -581,6 +629,25 @@ if st.session_state["page_mode"] == "relation":
         type=["pdf", "docx", "txt", "md"],
         accept_multiple_files=True
     )
+    st.subheader("0. Cached Demo")
+
+    col_cache_1, col_cache_2 = st.columns(2, gap="large")
+
+    with col_cache_1:
+        if literature_cached_run_exists():
+            if st.button("Load Literature Cached Demo", use_container_width=True):
+                literature_summaries, normalized_literature_summaries, relationship_result = load_literature_cached_run()
+
+                st.session_state["literature_summaries"] = literature_summaries
+                st.session_state["normalized_literature_summaries"] = normalized_literature_summaries
+                st.session_state["relationship_result"] = relationship_result
+
+                st.success("Literature cached demo loaded.")
+        else:
+            st.info("No literature cached demo found yet.")
+
+    with col_cache_2:
+        st.caption("Run the literature workflow once, then save the current result as a cached demo.")
 
     if uploaded_papers:
         soft_summary(f"{len(uploaded_papers)} file(s) uploaded and ready for processing.")
@@ -742,6 +809,20 @@ if st.session_state["page_mode"] == "relation":
         with st.expander("View inferred relationship JSON", expanded=False):
             st.code(json.dumps(result, indent=2), language="json")
 
+    if st.session_state.get("literature_summaries") is not None:
+        st.subheader("9. Save Cached Demo")
+        st.write("Save the current literature result so it can be loaded later as a cached run.")
+
+        if st.button("Save Current Literature Result as Cached Demo", use_container_width=True):
+            try:
+                save_literature_cached_run(
+                    literature_summaries=st.session_state.get("literature_summaries"),
+                    normalized_literature_summaries=st.session_state.get("normalized_literature_summaries"),
+                    relationship_result=st.session_state.get("relationship_result")
+                )
+                st.success("Literature cached demo saved successfully.")
+            except Exception as e:
+                st.error(f"Failed to save literature cached demo: {e}")
     st.stop()
 
 
